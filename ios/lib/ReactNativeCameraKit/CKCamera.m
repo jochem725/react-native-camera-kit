@@ -110,6 +110,9 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
 @property (nonatomic, strong) UIColor *ratioOverlayColor;
 @property (nonatomic, strong) RCTDirectEventBlock onReadCode;
 
+// orienration logic
+@property (nonatomic) CMMotionManager *motionManager;
+
 @property (nonatomic) BOOL isAddedOberver;
 
 @end
@@ -149,6 +152,7 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
     dispatch_async( self.sessionQueue, ^{
         if ( self.setupResult == CKSetupResultSuccess ) {
             [self.session stopRunning];
+            [self.motionManager stopAccelerometerUpdates];
             [self removeObservers];
         }
     } );
@@ -163,6 +167,7 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
     if (self){
         // Create the AVCaptureSession.
         self.session = [[AVCaptureSession alloc] init];
+        
         
         // Communicate with the session and other session objects on this queue.
         self.sessionQueue = dispatch_queue_create( "session queue", DISPATCH_QUEUE_SERIAL );
@@ -189,6 +194,14 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
         self.zoomMode = CKCameraZoomModeOn;
         self.flashMode = CKCameraFlashModeAuto;
         self.focusMode = CKCameraFocushModeOn;
+        
+        // Create the orientation motion manager.
+        self.motionManager = [[CMMotionManager alloc] init];
+        
+        self.motionManager.accelerometerUpdateInterval = 0.01;
+        self.motionManager.gyroUpdateInterval = 0.01;
+        [self.motionManager startAccelerometerUpdates];
+        
     }
     
     return self;
@@ -496,18 +509,45 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
 
 #pragma mark - actions
 
+- (UIDeviceOrientation) orientationFromMotion:(CMAccelerometerData *)data {
+    CMAcceleration acceleration = data.acceleration;
+    CGFloat angle = M_PI / 2.0f - atan2(-acceleration.y, acceleration.x);
+    
+    if (angle > M_PI) {
+        angle = angle - 2 * M_PI;
+    }
+    
+    if (angle < -M_PI) {
+        angle = angle + 2 * M_PI;
+    }
+    
+    UIDeviceOrientation orientation;
 
+    NSLog(@"PICTURE WITH ANGLE %f", angle);
+    if ((angle < 3 * M_PI_4) && (angle < -3 * M_PI_4) ) {
+        NSLog(@"UPSIDE DOWN");
+        return UIDeviceOrientationPortraitUpsideDown;
+    } else if ((angle < -M_PI_4) && (angle > -3 * M_PI_4)) {
+        return UIDeviceOrientationLandscapeLeft;
+    } else if ((angle > M_PI_4) && angle < 3 * M_PI_4) {
+        return UIDeviceOrientationLandscapeRight;
+    } else {
+        return UIDeviceOrientationPortrait;
+    }
+        
+    return orientation;
+}
 
 - (void)snapStillImage:(BOOL)shouldSaveToCameraRoll success:(CaptureBlock)block {
     dispatch_async( self.sessionQueue, ^{
-        AVCaptureConnection *connection = [self.stillImageOutput connectionWithMediaType:AVMediaTypeVideo];
+        CMAccelerometerData *acceleration = [self.motionManager accelerometerData];
+        AVCaptureVideoOrientation videoOrientation = (AVCaptureVideoOrientation)[self orientationFromMotion:acceleration];
+
         
-        // Update the orientation on the still image output video connection before capturing.
-        connection.videoOrientation = self.previewLayer.connection.videoOrientation;
-        
-        
+        [[self.stillImageOutput connectionWithMediaType:AVMediaTypeVideo] setVideoOrientation:videoOrientation];
+
         // Capture a still image.
-        [self.stillImageOutput captureStillImageAsynchronouslyFromConnection:connection completionHandler:^( CMSampleBufferRef imageDataSampleBuffer, NSError *error ) {
+        [self.stillImageOutput captureStillImageAsynchronouslyFromConnection:[[self stillImageOutput] connectionWithMediaType:AVMediaTypeVideo] completionHandler:^( CMSampleBufferRef imageDataSampleBuffer, NSError *error ) {
             if ( imageDataSampleBuffer ) {
                 // The sample buffer is not retained. Create image data before saving the still image to the photo library asynchronously.
                 NSData *imageData = [AVCaptureStillImageOutput jpegStillImageNSDataRepresentation:imageDataSampleBuffer];
@@ -518,12 +558,11 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
                 CGRect rectToCrop = CGRectMake((capturedImage.size.width-previewScaleSize.width)*0.5, (capturedImage.size.height-previewScaleSize.height)*0.5, previewScaleSize.width, previewScaleSize.height);
                 
                 if (self.ratioOverlayString) {
-                    
                     rectToCrop = [CKCamera cropRectForSize:rectToCrop overlayObject:self.cameraOverlayView.overlayObject];
                 }
                 
                 CGImageRef imageRef = CGImageCreateWithImageInRect(capturedImage.CGImage, rectToCrop);
-                capturedImage = [UIImage imageWithCGImage:imageRef scale:capturedImage.scale orientation:UIImageOrientationUp];
+                capturedImage = [UIImage imageWithCGImage:imageRef scale:capturedImage.scale orientation:[capturedImage imageOrientation]];
                 imageData = UIImageJPEGRepresentation(capturedImage, 0.85f);
                 
                 [PHPhotoLibrary requestAuthorization:^( PHAuthorizationStatus status ) {
@@ -1121,4 +1160,3 @@ const NSString *isNeedMultipleScanBarcode = @"isNeedMultipleScanBarcode";
 
 
 @end
-
