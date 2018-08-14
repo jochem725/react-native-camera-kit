@@ -7,7 +7,9 @@
 //
 
 #import <UIKit/UIKit.h>
+#import <CoreMotion/CoreMotion.h>
 @import AVFoundation;
+@import CoreMotion;
 
 #if __has_include(<React/RCTBridge.h>)
 #import <React/RCTConvert.h>
